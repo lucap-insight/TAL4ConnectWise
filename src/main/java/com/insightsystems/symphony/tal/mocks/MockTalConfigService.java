@@ -28,11 +28,14 @@ public class MockTalConfigService implements TalConfigService {
     public TicketSystemConfig retrieveTicketSystemConfig(UUID uuid) throws ExecutionException {
         TicketSystemConfig config = new TicketSystemConfig();
 
+        // Add custom
         Map<String, String> instanceConfigMapping = new HashMap<>();
+        // URL example: "https://connect.myCompany.com.au"
         instanceConfigMapping.put(TicketSourceConfigProperty.URL, null);
+        // API_PATH example: "/api/ticket/v4_6_release/apis/3.0/service/tickets"
         instanceConfigMapping.put(TicketSourceConfigProperty.API_PATH, null);
-        instanceConfigMapping.put(TicketSourceConfigProperty.LOGIN, null);
-        instanceConfigMapping.put(TicketSourceConfigProperty.PASSWORD, null);
+        instanceConfigMapping.put(TicketSourceConfigProperty.LOGIN, null); // ConnectWise clientID
+        instanceConfigMapping.put(TicketSourceConfigProperty.PASSWORD, null); // ConnectWise Authorization
 
         // keys are Symphony priorities and values are third party mapped statuses
         Map<String, String> customerPriorityMappingForThirdParty  = new HashMap<>();
