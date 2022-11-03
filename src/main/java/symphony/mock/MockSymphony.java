@@ -27,7 +27,7 @@ public class MockSymphony{
         String symphonyLink = "1067758";
         String thirdPartyId = "187562";
         String thirdPartyLink = null;
-        String customerId = ""; // FIXME: find out what is this
+        String customerId = "";
         String priority = "Minor";
         String status = "Open";
         String subject = "<TEST> Test ticket for TAL";
