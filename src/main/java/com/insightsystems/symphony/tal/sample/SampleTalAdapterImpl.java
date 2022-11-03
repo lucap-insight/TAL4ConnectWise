@@ -247,7 +247,6 @@ public class SampleTalAdapterImpl implements TalAdapter {
                 // Create new ticket on ConnectWise
                 logger.info("syncTalTicket: Attempting to create ticket on ConnectWise");
 
-                // TODO: Check what happens when they are actually null
                 // Check if URL and API_PATH are not null
                 if (config.getTicketSourceConfig().get(TicketSourceConfigProperty.URL) == null ||
                         config.getTicketSourceConfig().get(TicketSourceConfigProperty.API_PATH) == null) {
@@ -273,8 +272,13 @@ public class SampleTalAdapterImpl implements TalAdapter {
                         "}";
 
                 // Writing the body
-                // FIXME: Handle API call error?
-                CWTicket = ConnectWiseAPICall(url, "POST", requestBody);
+                try {
+                    CWTicket = ConnectWiseAPICall(url, "POST", requestBody);
+                } catch (Exception e) {
+                    // TODO: What to do when connection fails?
+                    logger.error("syncTalTicket: Unable to POST ticket - {}", e.getMessage());
+                    throw new RuntimeException(e);
+                }
 
                 // Setting URL to proper value with ticket id
                 if (CWTicket != null) {
@@ -445,7 +449,7 @@ public class SampleTalAdapterImpl implements TalAdapter {
 
             // Attachments
             //logger.info("syncTalTicket: Updating ticket attachments");
-            // TODO: Add attachments to ticket sync PATCH
+            // TODO: Place to add attachments to ticket sync PATCH
 
             //System.out.println(requestBody);
 
@@ -484,6 +488,11 @@ public class SampleTalAdapterImpl implements TalAdapter {
             throw new NullPointerException("Error retrieving client ID and/or authorization");
         }
 
+        if (url == null) {
+            logger.error("ConnectWiseAPICall: URL cannot be null");
+            throw new NullPointerException("URL for API call cannot be null");
+        }
+
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request = null;
 
@@ -505,7 +514,7 @@ public class SampleTalAdapterImpl implements TalAdapter {
                         .build();
             }
         } catch (Exception e) {
-            logger.error(e.toString());
+            logger.error("ConnectWiseAPICall: " + e.toString());
             throw new MalformedURLException(e.getMessage());
         }
 
