@@ -6,7 +6,6 @@ import com.avispl.symphony.api.tal.dto.Comment;
 import com.avispl.symphony.api.tal.dto.TalTicket;
 import com.avispl.symphony.api.tal.error.TalAdapterSyncException;
 
-import java.lang.reflect.Array;
 import java.util.*;
 
 public class MockSymphony{
@@ -21,6 +20,10 @@ public class MockSymphony{
         this.TAL = TAL;
     }
 
+    /**
+     * This getTicket is not a real Symphony method and is used only to return a pre-set TalTicket
+     * @return properly setup TalTicket object
+     */
     public TalTicket getTicket() {
         // Setting parameters for new ticket
         String symphonyId = "1067758";
@@ -30,15 +33,15 @@ public class MockSymphony{
         String customerId = "";
         String priority = "Minor";
         String status = "Open";
-        String subject = "<TEST> Test ticket for TAL";
-        String description = "Mock ticket for TAL Adapter test";
+        String subject = "<TEST> test ticket for TAL";
+        String description = "New TAL adapter test";
         String requester = "lucap@insightsystems.com.au";
         String assignedTo = "lucap@insightsystems.com.au";
-        Set< Comment > comments = new HashSet<Comment>();
+        Set< Comment > comments = new HashSet<>();
 
-        Set< Attachment > attachments = new HashSet<Attachment>();
+        Set< Attachment > attachments = new HashSet<>();
 
-        Map<String, String> extraParams = new HashMap<String, String>();
+        Map<String, String> extraParams = new HashMap<>();
         // Current date time
         Date date = new Date();
         Long lastModified = date.getTime();
@@ -68,6 +71,7 @@ public class MockSymphony{
 
         return newTicket;
     }
+
 
     public TalTicket getTicketPATCHMissingInfo() {
         // Setting parameters for new ticket
@@ -179,8 +183,8 @@ public class MockSymphony{
                 ticketToReturn = TAL.syncTalTicket(ticket);
 
             } catch (TalAdapterSyncException e) {
-                System.out.println("SampleTalAdapterImpl was unable to retrieve " +
-                        "configuration from TalConfigService: " + e.getMessage());
+                System.out.println(String.format("SampleTalAdapterImpl was unable to retrieve " +
+                        "configuration from TalConfigService: %s - %s", e.getMessage(), e.getHttpStatus()));
             }
         } else {
             throw new NullPointerException("TAL variable not set");

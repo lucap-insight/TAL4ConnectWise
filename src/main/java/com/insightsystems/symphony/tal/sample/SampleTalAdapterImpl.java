@@ -36,6 +36,8 @@ import org.json.JSONObject;
 import org.json.JSONArray;
 import org.json.JSONException;
 
+import org.springframework.http.HttpStatus;
+
 /**
  * Sample TAL adapter implementation.
  *
@@ -180,9 +182,9 @@ public class SampleTalAdapterImpl implements TalAdapter {
 
                     // Build url from config and ticket Third Party ID:
                     // URL example: "https://connect.myCompany.com.au"
-                    // API_PATH example: "/api/ticket/v4_6_release/apis/3.0/service/tickets"
+                    // API_PATH example: "/v4_6_release/apis/3.0/service/tickets"
                     // ThirdPartyId example: "187204"
-                    // url example: "https://connect.myCompany.com.au/api/ticket/v4_6_release/apis/3.0/service/tickets/187204"
+                    // url example: "https://connect.myCompany.com.au/v4_6_release/apis/3.0/service/tickets/187204"
 
                     url = config.getTicketSourceConfig().get(TicketSourceConfigProperty.URL) +
                             config.getTicketSourceConfig().get(TicketSourceConfigProperty.API_PATH) +
@@ -203,8 +205,7 @@ public class SampleTalAdapterImpl implements TalAdapter {
                     // Check if a connectionFailed already happen to prevent creating multiple tickets
                     if (Objects.equals(talTicket.getExtraParams().get("connectionFailed"), "true")) {
                         logger.info("synTalTicket: Ticket has failed before - not creating new ticket");
-                        createTicket = false;
-                        // TODO: return null? What to do when connection is an error?
+                        //createTicket = false;
                         throw new TalAdapterSyncException("Cannot sync TAL ticket");
                     } else {
                         logger.info("syncTalTicket: Attempting to create new ticket");
@@ -251,7 +252,6 @@ public class SampleTalAdapterImpl implements TalAdapter {
                 if (config.getTicketSourceConfig().get(TicketSourceConfigProperty.URL) == null ||
                         config.getTicketSourceConfig().get(TicketSourceConfigProperty.API_PATH) == null) {
                     logger.error("syncTalTicket: URL or API_PATH not setup on Config");
-                    // TODO: What to do when connection fails?
                     throw new TalAdapterSyncException("Cannot create a new ticket: URL or API_PATH not setup on config");
                 }
 
@@ -268,16 +268,19 @@ public class SampleTalAdapterImpl implements TalAdapter {
                         "    \"company\": {\n" +
                         "        \"id\": 250\n" +
                         "    },\n" +
-                  //      "    \"contactEmailAddress\" : \"" + talTicket.getRequester() + "\"\n" +
+                        //      "    \"contactEmailAddress\" : \"" + talTicket.getRequester() + "\"\n" +
                         "}";
 
                 // Writing the body
                 try {
                     CWTicket = ConnectWiseAPICall(url, "POST", requestBody);
-                } catch (Exception e) {
-                    // TODO: What to do when connection fails?
+                } catch (TalAdapterSyncException e) {
                     logger.error("syncTalTicket: Unable to POST ticket - {}", e.getMessage());
-                    throw new RuntimeException(e);
+                    throw e;
+                }
+                catch (Exception e) {
+                    logger.error("syncTalTicket: Unable to POST ticket - {}", e.getMessage());
+                    throw new RuntimeException(e.getMessage());
                 }
 
                 // Setting URL to proper value with ticket id
@@ -299,13 +302,17 @@ public class SampleTalAdapterImpl implements TalAdapter {
             }
 
 
-            // 3. if succeeded change talTicket, set thirdPartyId and thirdPartyLink set for ticket, comments and attachments provisioned in 3rd party system
+            // 3. if succeeded:
+            //      change talTicket
+            //      set thirdPartyId and thirdPartyLink
+            //      set ticket summary (subject), priority, status and owner
+            //      set comments and attachments provisioned in 3rd party system
             // Check and update:
 
             // Check if connection was established correctly
             if (CWTicket == null) {
                 logger.info("syncTalTicket: ConnectWise ticket error");
-                throw new RuntimeException();
+                throw new RuntimeException("ConnectWise ticket error");
             }
 
             // Ticket's third party link and ID check
@@ -352,25 +359,27 @@ public class SampleTalAdapterImpl implements TalAdapter {
                 ConnectWiseValue = null;
             }
 
+            // If there is no ConnectWise value and no Symphony value, ensure that there is a standard summary
             if (SymphonyValue == null && (ConnectWiseValue == null || Objects.equals(ConnectWiseValue, "null"))) {
                 if (talTicket.getDescription() != null) {
                     // If ticket summary does not exist (Symphony or CW), use description instead
                     SymphonyValue = talTicket.getDescription();
+                    talTicket.setSubject(SymphonyValue);
                     logger.info("SampleTalAdapter: syncTalTicket: Setting ticket summary to ticket description");
                 } else {
                     // If ticket description also does not exist, use pre-set value for ticket summary
                     logger.info("SampleTalAdapter: syncTalTicket: Symphony ticket does not have summary or description. Using standard summary.");
-                    // TODO: Hard coded summary standard
+                    // FIXME: Hard coded summary standard
                     SymphonyValue = "<Symphony> NEW Ticket";
                     talTicket.setSubject(SymphonyValue);
                 }
             }
 
             String requestResult = createRequestBody(SymphonyValue, ConnectWiseValue, path, true);
-            if (requestResult != null)  {
+            if (requestResult != null)  { // So, if an update is needed:
                 if (Objects.equals(requestResult, "Update Symphony")) {
                     // This means there is a CW value but no Symphony value
-                    logger.info("syncTalTicket: Updating Symphony using CW value");
+                    logger.info("syncTalTicket: Updating Symphony using ConnectWise value");
                     talTicket.setSubject(ConnectWiseValue);
                 } else {
                     requestBody += requestResult;
@@ -468,16 +477,33 @@ public class SampleTalAdapterImpl implements TalAdapter {
 
 
             // 4. return updated instance using "return statement" to the caller
-
+            logger.info("synTalTicket: Synchronization complete");
             return talTicket;
 
-        } catch (Exception e) {
+        }
+        catch (TalAdapterSyncException e) {
+            // If process results in a TalAdapterSyncException the HTTP info will be carried over
             logger.warn("Failed to sync ticket from TAL to InMemory Ticket System {}", talTicket);
-            throw new TalAdapterSyncException("Cannot sync TAL ticket", e);
+            throw e;
+        }
+        catch (Exception e) {
+            // Otherwise the method will change the error to a TalAdapterSyncException and add the information to the
+            //error description
+            logger.warn("Failed to sync ticket from TAL to InMemory Ticket System {}", talTicket);
+            throw new TalAdapterSyncException(String.format("Cannot sync TAL ticket: %s - %s",
+                    e.getClass().getSimpleName(), e.getMessage()), e);
         }
     }
 
-    public JSONObject ConnectWiseAPICall(String url, String method, String requestBody) throws MalformedURLException {
+    /**
+     * Performs an HTTP request call to ConnectWise API using credentials set in config
+     * @param url the HTTP request URI
+     * @param method the HTTP method (i.e. GET)
+     * @param requestBody the HTTP request's body
+     * @return JSON object with the HTTP request response
+     * @throws TalAdapterSyncException if request fails
+     */
+    public JSONObject ConnectWiseAPICall(String url, String method, String requestBody) throws TalAdapterSyncException {
         // Optional: Formalize input error checking on ConnectWiseAPICall
 
         String clientID = config.getTicketSourceConfig().get(TicketSourceConfigProperty.LOGIN);
@@ -485,12 +511,13 @@ public class SampleTalAdapterImpl implements TalAdapter {
 
         if (clientID == null || authorization == null) {
             logger.error("ConnectWiseAPICall: Unable to retrieve client ID and/or authorization from configuration");
-            throw new NullPointerException("Error retrieving client ID and/or authorization");
+            throw new TalAdapterSyncException("Error retrieving client ID and/or authorization",
+                    HttpStatus.UNAUTHORIZED);
         }
 
         if (url == null) {
             logger.error("ConnectWiseAPICall: URL cannot be null");
-            throw new NullPointerException("URL for API call cannot be null");
+            throw new TalAdapterSyncException("URL for API call cannot be null", HttpStatus.BAD_REQUEST);
         }
 
         HttpClient client = HttpClient.newHttpClient();
@@ -514,26 +541,30 @@ public class SampleTalAdapterImpl implements TalAdapter {
                         .build();
             }
         } catch (Exception e) {
-            logger.error("ConnectWiseAPICall: " + e.toString());
-            throw new MalformedURLException(e.getMessage());
+            logger.error("ConnectWiseAPICall: " + e.getMessage());
+            throw new TalAdapterSyncException(e.getMessage(), HttpStatus.BAD_REQUEST);
         }
 
         // Response
-        HttpResponse<String> response;
+        HttpResponse<String> response = null;
         logger.info("ConnectWiseAPICall: Getting response");
         try {
             response = client.send(request, HttpResponse.BodyHandlers.ofString());
         } catch (IOException | InterruptedException e) {
-            throw new RuntimeException(e + " - HTTP request error");
+            if (response != null) {
+                throw new TalAdapterSyncException(e + " - HTTP request error",
+                        HttpStatus.valueOf(response.statusCode()));
+            } else throw new TalAdapterSyncException(e + " - HTTP request error");
         }
 
-        if (response != null && response.statusCode() == 200 || response.statusCode() == 201) {
+        if (response != null && (response.statusCode() == 200 || response.statusCode() == 201)) {
             logger.info("ConnectWiseAPICall: "+method+" call successful - HTTP Code:"+
                     response.statusCode());
         } else {
-            logger.error("ConnectWiseAPICall: " + method +
-                    " call unsuccessful - HTTP Code:"+ response.statusCode());
-            throw new RuntimeException(method + " Request error");
+            logger.error("ConnectWiseAPICall: {} call unsuccessful - HTTP Code: {}", method,
+                    response != null ? response.statusCode() : "not specified");
+            throw new TalAdapterSyncException(method + " Request error",
+                    response != null ? HttpStatus.valueOf(response.statusCode()) : null);
         }
 
         JSONObject jsonObject;
@@ -546,28 +577,37 @@ public class SampleTalAdapterImpl implements TalAdapter {
                 jsonObject = new JSONObject("{ \"JSONArray\" : " + response.body() + "}");
             } catch (JSONException e2) {
                 // If it is also not an Array: give up and report error
-                logger.warn("ConnectWiseAPICall: error parsing content to JSON - " + e2);
+                logger.error("ConnectWiseAPICall: error parsing content to JSON - " + e2);
+                logger.error("ConnectWiseAPICall: API call object: " + response.request());
                 return null;
             }
         }
         return jsonObject;
     }
 
-    public void syncComments(TalTicket talTicket) throws IOException, InterruptedException {
+    /**
+     * Performs the synchronization of comments between Symphony and ConnectWise
+     * @param talTicket the Symphony ticket being synced
+     * @throws TalAdapterSyncException if retrieval of ConnectWise comments fail
+     */
+    public void syncComments(TalTicket talTicket) throws TalAdapterSyncException {
         // Getting an array of ConnectWise comments
         logger.info("syncComments: Getting ConnectWise comments");
 
         String url = talTicket.getThirdPartyLink() + "/notes"; // + "/notes" to get ticket comments on CW
-        JSONArray jsonArray;
+        JSONArray ConnectWiseComments;
+
         // API Call
         try {
-            jsonArray = ConnectWiseAPICall(url, "GET", null).getJSONArray("JSONArray");
-        } catch (MalformedURLException e) {
-            throw new RuntimeException(e);
+            ConnectWiseComments = ConnectWiseAPICall(url, "GET", null).getJSONArray("JSONArray");
+        } catch (TalAdapterSyncException e) {
+            logger.error("syncComments: Unable to retrieve comments from ConnectWise");
+            throw e;
         }
 
         // Sync description - returns the comment with the description
-        JSONObject descriptionCW = syncDescription(talTicket, url, jsonArray);
+        // (on ConnectWise the description is the oldest discussion comment)
+        JSONObject descriptionCW = syncDescription(talTicket, url, ConnectWiseComments);
 
         // Compare each talTicket comment to CW comment
         Set<Comment> commentsToPatch = new HashSet<>();
@@ -585,18 +625,19 @@ public class SampleTalAdapterImpl implements TalAdapter {
             boolean ticketExists = false;
 
             // Ignore the description comment - it should already be synced by the syncDescription method
-            if (descriptionCW != null && Objects.equals(talComment.getThirdPartyId(), descriptionCW.getInt("id") + "")) {
+            if (descriptionCW != null &&
+                    Objects.equals(talComment.getThirdPartyId(), descriptionCW.getInt("id") + "")) {
                 continue;
             }
 
-            // Check if ticket in CW
-            for (int i = 0; i < jsonArray.length(); i++) {
-                // Compare IDs
+            // Check if comment is in CW
+            for (int i = 0; i < ConnectWiseComments.length(); i++) {
+                // If TAL comment is found on ConnectWise (by matching IDs)
                 if (talComment.getThirdPartyId() != null &&
-                        Objects.equals(talComment.getThirdPartyId(), jsonArray.getJSONObject(i).get("id") + "")) {
+                        Objects.equals(talComment.getThirdPartyId(), ConnectWiseComments.getJSONObject(i).get("id")+"")) {
 
                     ticketExists = true;
-                    JSONObject cwComment = jsonArray.getJSONObject(i);
+                    JSONObject cwComment = ConnectWiseComments.getJSONObject(i);
 
                     // Compare text to check if ticket needs patching
                     ticketNeedsPatching = (!Objects.equals(talComment.getText(), cwComment.get("text")));
@@ -617,22 +658,26 @@ public class SampleTalAdapterImpl implements TalAdapter {
         // If there are tickets in CW that are NOT in Symphony (Direction CW -> Symphony)
         logger.info("syncComments: Comparing ConnectWise comments to Symphony");
         DateTimeFormatter ConnectWiseDateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'H:m:sX");
-        for (int i = 0; i < jsonArray.length(); i++) {
-            JSONObject commentCW = jsonArray.getJSONObject(i);
+        boolean commentNotInSymphony;
 
-            boolean commentNotInSymphony = true;
+        // for each ConnectWise comment:
+        for (int i = 0; i < ConnectWiseComments.length(); i++) {
+            JSONObject commentCW = ConnectWiseComments.getJSONObject(i);
+
+            commentNotInSymphony = true;
 
             // Check if CW ticket is in TAL
             itr = talTicket.getComments().iterator();
             while (itr.hasNext()) {
                 talComment = itr.next();
+                // If CW comment is found on Symphony
                 if (Objects.equals(talComment.getThirdPartyId(), commentCW.getInt("id") + "")) {
                     commentNotInSymphony = false;
                 }
             }
 
             if (commentNotInSymphony) {
-                logger.info("syncComments: ConnectWise comment found not in Symphony - Updating Symphony");
+                logger.info("syncComments: ConnectWise comment not found in Symphony - Updating Symphony");
                 LocalDateTime commentDate = LocalDateTime.parse(commentCW.getString("dateCreated"),
                         ConnectWiseDateTimeFormatter);
                 ZonedDateTime zdt = ZonedDateTime.of(commentDate, ZoneId.systemDefault());
@@ -646,7 +691,7 @@ public class SampleTalAdapterImpl implements TalAdapter {
             }
         }
 
-        // PATCH tickets
+        // PATCH comments
         if (!commentsToPatch.isEmpty()) {
             logger.info("syncComments: Patching {} comments", commentsToPatch.size());
             itr = commentsToPatch.iterator();
@@ -670,15 +715,21 @@ public class SampleTalAdapterImpl implements TalAdapter {
                         "    }\n" +
                         "]";
 
-                ConnectWiseAPICall(noteUrl, "PATCH", requestBody);
-
+                try {
+                    ConnectWiseAPICall(noteUrl, "PATCH", requestBody);
+                } catch (TalAdapterSyncException e) {
+                    // Does not throw an error as to not interrupt sync process
+                    logger.error("syncComments: Unable to PATCH comment Symphony ID: {}. HTTP error: {}",
+                            talComment.getSymphonyId(),
+                            e.getHttpStatus() != null ? e.getHttpStatus() : "not specified");
+                }
             }
-            logger.info("syncComments: All comments PATCH SUCCESSFUL");
+            logger.info("syncComments: Finished PATCHing comments");
         } else {
             logger.info("syncComments: No comments to patch");
         }
 
-        // POST tickets
+        // POST comments
         if (!commentsToPost.isEmpty()) {
             logger.info("syncComments: Posting {} new comments to ConnectWise",
                     commentsToPost.size());
@@ -699,19 +750,30 @@ public class SampleTalAdapterImpl implements TalAdapter {
                         "    }\n" : "\n") +
                         "}";
 
-                JSONObject jsonObject = ConnectWiseAPICall(url, "POST", requestBody);
-
-                // Add ThirdParty ticket ID to ticket
-                logger.info("syncComments: Updating Comment ID on Symphony");
-                talComment.setThirdPartyId(jsonObject.getInt("id") + "");
+                try {
+                    JSONObject jsonObject = ConnectWiseAPICall(url, "POST", requestBody);
+                    // Add ThirdParty ticket ID to ticket
+                    logger.info("syncComments: POST Successful. Updating Comment ID on Symphony");
+                    talComment.setThirdPartyId(jsonObject.getInt("id") + "");
+                } catch (TalAdapterSyncException e) {
+                    logger.error("syncComments: Unable to PATCH comment Symphony ID: {}. HTTP error: {}",
+                            talComment.getSymphonyId(),
+                            e.getHttpStatus() != null ? e.getHttpStatus() : "not specified");
+                }
             }
-            logger.info("syncComments: All comments POST SUCCESSFUL");
+            logger.info("syncComments: Finished POSTing comments");
         } else {
             logger.info("syncComments: No comments to post");
         }
-
     }
 
+    /**
+     * Performs the synchronization of the ticket's description
+     * @param talTicket the Symphony ticket being synced
+     * @param url the URI to connect with the ticket's ConnectWise API
+     * @param CWComments JSONArray with all comments found on the ConnectWise ticket
+     * @return if found, JSONObject with ConnectWise's comment that contains its description - null otherwise
+     */
     public JSONObject syncDescription(TalTicket talTicket, String url, JSONArray CWComments) {
         /*
         This method attempts to sync the Symphony and CW descriptions.
@@ -742,7 +804,7 @@ public class SampleTalAdapterImpl implements TalAdapter {
                     descriptionCWDate = commentDate;
                     descriptionCW = comment;
                 }
-                // On ConnectWise the description is the oldest comment
+                // On ConnectWise the description is the oldest discussion comment
                 else if (commentDate.isBefore(descriptionCWDate)) {
                     descriptionCWDate = commentDate;
                     descriptionCW = comment;
@@ -750,74 +812,81 @@ public class SampleTalAdapterImpl implements TalAdapter {
             }
         }
 
-
-        // Make sure ticket's description is valid and not null
-        if (talTicket.getDescription() == null) {
-            logger.info("syncDescription: Symphony ticket has no description");
-            // Check if CW has a description
-            if (descriptionCW != null && descriptionCW.getString("text") != null &&
-                        !Objects.equals(descriptionCW.getString("text"), "null")) {
-                // set description to CW
-                logger.info("syncDescription: Description found in ConnectWise - Updating Symphony");
-                talTicket.setDescription(descriptionCW.getString("text"));
+        // If there is no ConnectWise description comment
+        if (descriptionCW == null) {
+            // If Symphony ticket has no description
+            if (talTicket.getDescription() == null) {
+                // But has a subject (summary)
+                if (talTicket.getSubject() != null) {
+                    logger.info("syncDescription: Symphony ticket has no description - using ticket summary as description");
+                    talTicket.setDescription(talTicket.getSubject());
+                } else {
+                    // If Symphony doesn't have either, no valid description could be found
+                    logger.warn("syncDescription: No valid description found");
+                    return null;
+                }
             }
-            // try using the ticket summary
-            else if (talTicket.getSubject() != null) {
-                logger.info("syncDescription: Using ticket summary as description");
-                talTicket.setDescription(talTicket.getSubject());
-            } else {
-                // if for some reason the ticket does not have a description or summary, interrupt sync
-                logger.warn("syncDescription: No valid description found");
+
+            // Create the discussion ticket on ConnectWise with the description text
+            String requestBody = "{\n" +
+                    "    \"text\" : \"" + talTicket.getDescription() + "\",\n" +
+                    "    \"detailDescriptionFlag\": true" + // Set to default internal notes
+                (talTicket.getRequester() != null ? // make sure ticket requester is not null
+                    "    ,\n" +
+                    "    \"member\": {\n" +
+                    "        \"identifier\": \"" + talTicket.getRequester() + "\"\n" +
+                    "    }\n"
+                    : "\n") +
+                "}";
+            logger.info("syncDescription: ConnectWise description comment not found. Creating new comment");
+            try {
+                ConnectWiseAPICall(url, "POST", requestBody);
+            } catch (TalAdapterSyncException e) {
+                logger.error("syncDescription: CW API Call error - unable to sync description. Http error code: {}",
+                        e.getHttpStatus() != null ? e.getHttpStatus() : "not specified");
                 return null;
             }
-        }
-
-        if (descriptionCW != null) {
-            // If CW description does not equal Symphony description ticket needs a PATCH
-            if (!Objects.equals(descriptionCW.getString("text"), talTicket.getDescription())) {
-
+        } else { // If ConnectWise has a description comment:
+            // If Symphony does not have a description: use ConnectWise description
+            if (talTicket.getDescription() == null) {
+                talTicket.setDescription(descriptionCW.getString("text"));
+                logger.info("syncDescription: Symphony description not found. Using description on ConnectWise");
+            }
+            // If CW description exists, and it's not the same as the one on Symphony:
+            else if (!Objects.equals(descriptionCW.getString("text"), talTicket.getDescription())) {
+                // Needs to PATCH ConnectWise description
                 String descriptionUrl = url + "/" + descriptionCW.getInt("id");
                 String requestBody = "[\n{" +
                         "   \"op\": \"replace\",\n" +
                         "   \"path\": \"text\",\n" +
                         "   \"value\": \""+ talTicket.getDescription() +"\"\n" +
                         "}\n]";
-                logger.info("syncDescription: Updating ticket description");
-
                 // API CALL
+                logger.info("syncDescription: Updating ConnectWise ticket description");
                 try {
                     ConnectWiseAPICall(descriptionUrl, "PATCH", requestBody);
-                } catch (MalformedURLException e) {
-                    logger.error("syncDescription: CW API Call error - unable to sync description");
-                    return null;
+                } catch (TalAdapterSyncException e) {
+                    logger.error("syncDescription: CW API Call error - unable to sync description. Http error: {}",
+                            e.getHttpStatus() != null ? e.getHttpStatus() : "not specified");
+                    return descriptionCW;
                 }
 
-            } else {
+            } else { // if CW and Symphony description exist and are the same
                 logger.info("syncDescription: No update required for ticket description");
-            }
-        } else {
-            // Needs to create the Discussion ticket with the description text
-            String requestBody = "{\n" +
-                    "    \"text\" : \"" + talTicket.getDescription() + "\",\n" +
-                    "    \"detailDescriptionFlag\": true" + // Set to default internal notes
-                    (talTicket.getRequester() != null ? // make sure ticket requester is not null
-                    "    ,\n" +
-                    "    \"member\": {\n" +
-                    "        \"identifier\": \"" + talTicket.getRequester() + "\"\n" +
-                    "    }\n" : "\n") +
-                    "}";
-            logger.info("syncDescription: Creating ticket description comment");
-            try {
-                ConnectWiseAPICall(url, "POST", requestBody);
-            } catch (MalformedURLException e) {
-                logger.error("syncDescription: CW API Call error - unable to sync description");
-                return null;
             }
         }
 
         return descriptionCW;
     }
 
+    /**
+     * Automatically generates a formatted String for an API call to ConnectWise
+     * @param SymphonyValue the Symphony value for a ticket attribute
+     * @param ConnectWiseValue the equivalent value in ConnectWise
+     * @param requestPath the path to the ConnectWise value in the ConnectWise API
+     * @param isString if the values are a String
+     * @return formatted string for HTTP request
+     */
     public String createRequestBody(String SymphonyValue, String ConnectWiseValue, String requestPath, boolean isString) {
         /* createRequestBody
              This method returns a string with the correct structure and values to perform the PATCH request based on
@@ -825,14 +894,16 @@ public class SampleTalAdapterImpl implements TalAdapter {
             SymphonyValue as the value that will replace. In case the ConnectWise value is null, the PATCH action is
             changed to add instead of replace.
              Returns null if there is no need for a PATCH request (Symphony and ConnectWise values match) or if
-            SymphonyValue is null.
+            SymphonyValue and ConnectWise value are null.
+             Returns the string "Update Symphony" if SymphonyValue is null but there is a ConnectWise value.
 
             INPUTS:
                 - SymphonyValue: value in Symphony ticket
-                - ConnectWiseValue: value in Symphony ticket
+                - ConnectWiseValue: value in ConnectWise ticket
                 - requestPath: ConnectWise API path for the value, i.e.: "priority/id"
                 - isString: Quotes are needed on the API request body if the value is a String
          */
+        String requestBody = null;
 
         // Check for null values
         if (SymphonyValue == null) {
@@ -840,9 +911,10 @@ public class SampleTalAdapterImpl implements TalAdapter {
                     requestPath);
 
             if (ConnectWiseValue != null && !Objects.equals(ConnectWiseValue, "null")) {
-                return "Update Symphony";
+                requestBody = "Update Symphony";
             }
-            return null; // null if Symphony AND ConnectWise are null because no change is needed
+            else
+                requestBody = null; // null if Symphony AND ConnectWise are null because no change is needed
         }
         else if (ConnectWiseValue == null) {
             // ConnectWiseValue will ONLY be null if it does not appear at all on the API GET call
@@ -851,18 +923,14 @@ public class SampleTalAdapterImpl implements TalAdapter {
                     requestPath);
             logger.info("createRequestBody: Updating ticket " + requestPath);
 
-            return  " {\n" +
+            requestBody =  " {\n" +
                     "        \"op\": \"add\",\n" +
                     "        \"path\": \"" + requestPath + "\",\n" +
                     "        \"value\": " + (isString ? "\"" + SymphonyValue + "\"" : SymphonyValue) + " \n" +
                     "    }\n";
         }
-
-        String requestBody = null;
-
-        // Check if there is a need for update
-        if (!Objects.equals(SymphonyValue, ConnectWiseValue)) {
-            logger.info("createRequestBody: Updating ticket " + requestPath);
+        else if (!Objects.equals(SymphonyValue, ConnectWiseValue)) { // Check if there is a need for update
+            logger.info("createRequestBody: Updating ticket {}", requestPath);
             requestBody = " {\n" +
                     "        \"op\": \"replace\",\n" +
                     "        \"path\": \"" + requestPath + "\",\n" +
